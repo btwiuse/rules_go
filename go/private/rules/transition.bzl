@@ -37,6 +37,16 @@ load(
     "platform_from_crosstool",
 )
 
+# A list of rules_go settings that are possibly set by go_transition.
+POTENTIALLY_TRANSITIONED_SETTINGS = [
+    "@io_bazel_rules_go//go/config:static",
+    "@io_bazel_rules_go//go/config:msan",
+    "@io_bazel_rules_go//go/config:race",
+    "@io_bazel_rules_go//go/config:pure",
+    "@io_bazel_rules_go//go/config:linkmode",
+    "@io_bazel_rules_go//go/config:tags",
+]
+
 def filter_transition_label(label):
     """Transforms transition labels for the current workspace.
 
@@ -53,6 +63,14 @@ def filter_transition_label(label):
         return label
     else:
         return str(Label(label))
+
+def _original_value_setting(setting):
+    if not "//go/config:" in setting:
+        return None
+    name = setting.split(":")[1]
+    return filter_transition_label("@io_bazel_rules_go//go/private/rules:original_" + name)
+
+_ORIGINAL_VALUE_SETTINGS = [_original_value_setting(setting) for setting in POTENTIALLY_TRANSITIONED_SETTINGS]
 
 def go_transition_wrapper(kind, transition_kind, name, **kwargs):
     """Wrapper for rules that may use transitions.
@@ -111,11 +129,15 @@ def go_transition_rule(**kwargs):
     return rule(**kwargs)
 
 def _go_transition_impl(settings, attr):
+    # NOTE: Keep the list of rules_go settings set by this transition in sync
+    # with POTENTIALLY_TRANSITIONED_SETTINGS.
+    #
     # NOTE(bazelbuild/bazel#11409): Calling fail here for invalid combinations
     # of flags reports an error but does not stop the build.
     # In any case, get_mode should mainly be responsible for reporting
     # invalid modes, since it also takes --features flags into account.
 
+    original_settings = settings
     settings = dict(settings)
 
     _set_ternary(settings, attr, "static")
@@ -173,6 +195,23 @@ def _go_transition_impl(settings, attr):
         linkmode_label = filter_transition_label("@io_bazel_rules_go//go/config:linkmode")
         settings[linkmode_label] = linkmode
 
+    for setting, value in settings.items():
+        original_value_setting = _original_value_setting(setting)
+        if not original_value_setting:
+            continue
+
+        # If the outgoing configuration would differ from the incoming one in a
+        # value, record the old value in the special original_* setting so that
+        # the real setting can be reset to this value before the new
+        # configuration would cross a non-deps dependency edge.
+        if value != original_settings[setting]:
+            # Encoding as JSON makes it possible to embed settings of arbitrary
+            # types (currently bool, string and string_list) into a string
+            # setting.
+            settings[original_value_setting] = json.encode(original_settings[setting])
+        else:
+            settings[original_value_setting] = ""
+
     return settings
 
 def _request_nogo_transition(settings, attr):
@@ -218,10 +257,10 @@ go_transition = transition(
         "@io_bazel_rules_go//go/config:pure",
         "@io_bazel_rules_go//go/config:tags",
         "@io_bazel_rules_go//go/config:linkmode",
-    ]],
+    ]] + _ORIGINAL_VALUE_SETTINGS,
 )
 
-_common_reset_transition_dict = {
+_common_reset_transition_dict = dict({
     "@io_bazel_rules_go//go/config:static": False,
     "@io_bazel_rules_go//go/config:msan": False,
     "@io_bazel_rules_go//go/config:race": False,
@@ -230,7 +269,7 @@ _common_reset_transition_dict = {
     "@io_bazel_rules_go//go/config:debug": False,
     "@io_bazel_rules_go//go/config:linkmode": LINKMODE_NORMAL,
     "@io_bazel_rules_go//go/config:tags": [],
-}
+}, **{setting: "" for setting in _ORIGINAL_VALUE_SETTINGS})
 
 _reset_transition_dict = dict(_common_reset_transition_dict, **{
     "@io_bazel_rules_go//go/private:bootstrap_nogo": True,
@@ -364,6 +403,39 @@ be built with 'cfg = "exec"' so they work on the execution platform, but they
 also shouldn't be affected by Go-specific config changes applied by
 go_transition.
 """,
+)
+
+def _non_go_transition_impl(settings, attr):
+    """Sets all Go settings to the values they had before the last go_transition.
+
+    non_go_transition sets all of the //go/config settings to the value they had
+    before the last go_transition. This should be used on all attributes of
+    go_library/go_binary/go_test that are built in the target configuration and
+    do not constitute advertise any Go providers.
+
+    Examples: This transition is applied to the 'data' attribute of go_binary so
+    that other Go binaries used at runtime aren't affected by a non-standard
+    link mode set on the go_binary target, but still use the same top-level
+    settings such as e.g. race instrumentation.
+    """
+    new_settings = {}
+    for setting in POTENTIALLY_TRANSITIONED_SETTINGS:
+        original_setting = _original_value_setting(setting)
+        original_value = settings[original_setting]
+        if original_value:
+            # Reset to the original value and clear it.
+            new_settings[setting] = json.decode(original_value)
+            new_settings[original_setting] = ""
+        else:
+            new_settings[setting] = settings[setting]
+            new_settings[original_setting] = settings[original_setting]
+
+    return new_settings
+
+non_go_transition = transition(
+    implementation = _non_go_transition_impl,
+    inputs = POTENTIALLY_TRANSITIONED_SETTINGS + _ORIGINAL_VALUE_SETTINGS,
+    outputs = POTENTIALLY_TRANSITIONED_SETTINGS + _ORIGINAL_VALUE_SETTINGS,
 )
 
 def _check_ternary(name, value):

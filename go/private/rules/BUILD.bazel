@@ -1,6 +1,20 @@
 load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
+load("@bazel_skylib//rules:common_settings.bzl", "string_setting")
+load(
+    ":transition.bzl",
+    "POTENTIALLY_TRANSITIONED_SETTINGS",
+)
 
 exports_files(["library.bzl"])
+
+[
+    string_setting(
+        name = "original_" + setting.split(":")[1],
+        build_setting_default = "",
+        visibility = ["//visibility:private"],
+    )
+    for setting in POTENTIALLY_TRANSITIONED_SETTINGS
+]
 
 filegroup(
     name = "all_rules",
