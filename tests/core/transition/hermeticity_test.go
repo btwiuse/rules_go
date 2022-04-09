@@ -27,8 +27,73 @@ func TestMain(m *testing.M) {
 	bazel_testing.TestMain(m, bazel_testing.Args{
 		Main: `
 -- BUILD.bazel --
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@io_bazel_rules_go//proto:def.bzl", "go_proto_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
+
+go_binary(
+    name = "main",
+    srcs = [
+        "main.go",
+        ":gen_go",
+    ],
+    data = [":helper"],
+    embedsrcs = [":helper"],
+    cdeps = [":helper"],
+    cgo = True,
+    linkmode = "c-archive",
+    gotags = ["foo"],
+    deps = [":lib"],
+)
+
+go_library(
+    name = "lib",
+    srcs = [
+        "lib.go",
+        ":gen_indirect_go",
+    ],
+    importpath = "example.com/lib",
+    data = [":indirect_helper"],
+    embedsrcs = [":indirect_helper"],
+    cdeps = [":indirect_helper"],
+    cgo = True,
+)
+
+go_test(
+    name = "main_test",
+    srcs = [
+        "main.go",
+        ":gen_go",
+    ],
+    data = [":helper"],
+    embedsrcs = [":helper"],
+    cdeps = [":helper"],
+    cgo = True,
+    linkmode = "c-archive",
+    gotags = ["foo"],
+)
+
+cc_library(
+    name = "helper",
+)
+
+cc_library(
+    name = "indirect_helper",
+)
+
+genrule(
+    name = "gen_go",
+    outs = ["gen.go"],
+    exec_tools = [":helper"],
+    cmd = "# Not needed for bazel cquery",
+)
+
+genrule(
+    name = "gen_indirect_go",
+    outs = ["gen_indirect.go"],
+    exec_tools = [":indirect_helper"],
+    cmd = "# Not needed for bazel cquery",
+)
 
 proto_library(
     name = "foo_proto",
@@ -40,6 +105,11 @@ go_proto_library(
     importpath = "github.com/bazelbuild/rules_go/tests/core/transition/foo",
     proto = ":foo_proto",
 )
+-- main.go --
+package main
+
+func main() {}
+-- lib.go --
 -- foo.proto --
 syntax = "proto3";
 
@@ -82,15 +152,32 @@ http_archive(
 	})
 }
 
-func TestGoProtoLibraryToolAttrsAreReset(t *testing.T) {
-	assertDependsCleanlyOn(t, "//:foo_go_proto", "@com_google_protobuf//:protoc")
-}
-
-func assertDependsCleanlyOn(t *testing.T, targetA, targetB string) {
+func TestGoBinaryNonGoAttrsAreReset(t *testing.T) {
 	assertDependsCleanlyOnWithFlags(
 		t,
-		targetA,
-		targetB,
+		"//:main",
+		"//:helper")
+}
+
+func TestGoLibraryNonGoAttrsAreReset(t *testing.T) {
+	assertDependsCleanlyOnWithFlags(
+		t,
+		"//:main",
+		"//:indirect_helper")
+}
+
+func TestGoTestNonGoAttrsAreReset(t *testing.T) {
+	assertDependsCleanlyOnWithFlags(
+		t,
+		"//:main_test",
+		"//:helper")
+}
+
+func TestGoProtoLibraryToolAttrsAreReset(t *testing.T) {
+	assertDependsCleanlyOnWithFlags(
+		t,
+		"//:foo_go_proto",
+		"@com_google_protobuf//:protoc",
 		"--@io_bazel_rules_go//go/config:static",
 		"--@io_bazel_rules_go//go/config:msan",
 		"--@io_bazel_rules_go//go/config:race",
@@ -100,8 +187,8 @@ func assertDependsCleanlyOn(t *testing.T, targetA, targetB string) {
 	)
 	assertDependsCleanlyOnWithFlags(
 		t,
-		targetA,
-		targetB,
+		"//:foo_go_proto",
+		"@com_google_protobuf//:protoc",
 		"--@io_bazel_rules_go//go/config:pure",
 	)
 }
@@ -123,12 +210,15 @@ func assertDependsCleanlyOnWithFlags(t *testing.T, targetA, targetB string, flag
 	cqueryOut := string(bytes.TrimSpace(out))
 	configHashes := extractConfigHashes(t, cqueryOut)
 	if len(configHashes) != 1 {
-		t.Fatalf(
-			"%s depends on %s in multiple configs with these differences in rules_go options: %s",
-			targetA,
-			targetB,
-			strings.Join(getGoOptions(t, configHashes...), "\n"),
-		)
+		differingGoOptions := getGoOptions(t, configHashes...)
+		if len(differingGoOptions) != 0 {
+			t.Fatalf(
+				"%s depends on %s in multiple configs with these differences in rules_go options: %s",
+				targetA,
+				targetB,
+				strings.Join(differingGoOptions, "\n"),
+			)
+		}
 	}
 	goOptions := getGoOptions(t, configHashes[0])
 	if len(goOptions) != 0 {
