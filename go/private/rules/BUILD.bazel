@@ -2,7 +2,7 @@ load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load("@bazel_skylib//rules:common_settings.bzl", "string_setting")
 load(
     ":transition.bzl",
-    "POTENTIALLY_TRANSITIONED_SETTINGS",
+    "TRANSITIONED_GO_SETTING_KEYS",
 )
 
 exports_files(["library.bzl"])
@@ -13,7 +13,7 @@ exports_files(["library.bzl"])
         build_setting_default = "",
         visibility = ["//visibility:private"],
     )
-    for setting in POTENTIALLY_TRANSITIONED_SETTINGS
+    for setting in TRANSITIONED_GO_SETTING_KEYS
 ]
 
 filegroup(
