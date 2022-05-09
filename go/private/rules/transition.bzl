@@ -37,18 +37,6 @@ load(
     "platform_from_crosstool",
 )
 
-# A list of rules_go settings that are possibly set by go_transition.
-# Keep their package name in sync with the implementation of
-# _original_setting_key.
-TRANSITIONED_GO_SETTING_KEYS = [
-    "@io_bazel_rules_go//go/config:static",
-    "@io_bazel_rules_go//go/config:msan",
-    "@io_bazel_rules_go//go/config:race",
-    "@io_bazel_rules_go//go/config:pure",
-    "@io_bazel_rules_go//go/config:linkmode",
-    "@io_bazel_rules_go//go/config:tags",
-]
-
 def filter_transition_label(label):
     """Transforms transition labels for the current workspace.
 
@@ -66,13 +54,31 @@ def filter_transition_label(label):
     else:
         return str(Label(label))
 
+# A list of rules_go settings that are possibly set by go_transition.
+# Keep their package name in sync with the implementation of
+# _original_setting_key.
+TRANSITIONED_GO_SETTING_KEYS = [
+    filter_transition_label(key)
+    for key in [
+        "//go/config:static",
+        "//go/config:msan",
+        "//go/config:race",
+        "//go/config:pure",
+        "//go/config:linkmode",
+        "//go/config:tags",
+    ]
+]
+
 def _original_setting_key(key):
     if not "//go/config:" in key:
-        return None
+        fail("_original_setting_key currently assumes that all Go settings live under //go/config, got: " + key)
     name = key.split(":")[1]
-    return filter_transition_label("@io_bazel_rules_go//go/private/rules:original_" + name)
+    return filter_transition_label("//go/private/rules:original_" + name)
 
-_ORIGINAL_SETTING_KEYS = [_original_setting_key(setting) for setting in TRANSITIONED_GO_SETTING_KEYS]
+_SETTING_KEY_TO_ORIGINAL_SETTING_KEY = {
+    setting: _original_setting_key(setting)
+    for setting in TRANSITIONED_GO_SETTING_KEYS
+}
 
 def go_transition_wrapper(kind, transition_kind, name, **kwargs):
     """Wrapper for rules that may use transitions.
@@ -197,23 +203,22 @@ def _go_transition_impl(settings, attr):
         linkmode_label = filter_transition_label("@io_bazel_rules_go//go/config:linkmode")
         settings[linkmode_label] = linkmode
 
-    for key, value in settings.items():
-        original_key = _original_setting_key(key)
-        if not original_key:
-            continue
+    for key, original_key in _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.items():
+        old_value = original_settings[key]
+        value = settings[key]
 
         # If the outgoing configuration would differ from the incoming one in a
         # value, record the old value in the special original_* key so that the
         # real setting can be reset to this value before the new configuration
         # would cross a non-deps dependency edge.
-        if value != original_settings[key]:
+        if value != old_value:
             # Encoding as JSON makes it possible to embed settings of arbitrary
             # types (currently bool, string and string_list) into a single type
             # of setting (string) with the information preserved whether the
             # original setting wasn't set explicitly (empty string) or was set
             # explicitly to its default  (always a non-empty string with JSON
             # encoding, e.g. "\"\"" or "[]").
-            settings[original_key] = json.encode(original_settings[key])
+            settings[original_key] = json.encode(old_value)
         else:
             settings[original_key] = ""
 
@@ -250,7 +255,7 @@ go_transition = transition(
     ] + TRANSITIONED_GO_SETTING_KEYS],
     outputs = [filter_transition_label(label) for label in [
         "//command_line_option:platforms",
-    ] + TRANSITIONED_GO_SETTING_KEYS + _ORIGINAL_SETTING_KEYS],
+    ] + TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values()],
 )
 
 _common_reset_transition_dict = dict({
@@ -262,7 +267,7 @@ _common_reset_transition_dict = dict({
     "@io_bazel_rules_go//go/config:debug": False,
     "@io_bazel_rules_go//go/config:linkmode": LINKMODE_NORMAL,
     "@io_bazel_rules_go//go/config:tags": [],
-}, **{setting: "" for setting in _ORIGINAL_SETTING_KEYS})
+}, **{setting: "" for setting in _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values()})
 
 _reset_transition_dict = dict(_common_reset_transition_dict, **{
     "@io_bazel_rules_go//go/private:bootstrap_nogo": True,
@@ -412,8 +417,7 @@ def _non_go_transition_impl(settings, attr):
     settings such as e.g. race instrumentation.
     """
     new_settings = {}
-    for key in TRANSITIONED_GO_SETTING_KEYS:
-        original_key = _original_setting_key(key)
+    for key, original_key in _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.items():
         original_value = settings[original_key]
         if original_value:
             # Reset to the original value and clear it.
@@ -427,8 +431,8 @@ def _non_go_transition_impl(settings, attr):
 
 non_go_transition = transition(
     implementation = _non_go_transition_impl,
-    inputs = TRANSITIONED_GO_SETTING_KEYS + _ORIGINAL_SETTING_KEYS,
-    outputs = TRANSITIONED_GO_SETTING_KEYS + _ORIGINAL_SETTING_KEYS,
+    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
+    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
 )
 
 def _check_ternary(name, value):
