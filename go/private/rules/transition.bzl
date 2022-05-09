@@ -420,12 +420,22 @@ def _non_go_transition_impl(settings, attr):
     for key, original_key in _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.items():
         original_value = settings[original_key]
         if original_value:
-            # Reset to the original value and clear it.
+            # Reset to the original value of the setting before go_transition.
             new_settings[key] = json.decode(original_value)
-            new_settings[original_key] = ""
         else:
             new_settings[key] = settings[key]
-            new_settings[original_key] = settings[original_key]
+
+        # Reset the value of the helper setting to its default for two reasons:
+        # 1. Performance: This ensures that the Go settings of non-Go
+        #    dependencies have the same values as before the go_transition,
+        #    which can prevent unnecessary rebuilds caused by configuration
+        #    changes.
+        # 2. Correctness in edge cases: If there is a path in the build graph
+        #    from a go_binary's non-Go dependency to a go_library that does not
+        #    pass through another go_binary (e.g., through a custom rule
+        #    replacement for go_binary), this transition could be applied again
+        #    and cause incorrect Go setting values.
+        new_settings[original_key] = ""
 
     return new_settings
 
