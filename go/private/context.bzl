@@ -481,11 +481,8 @@ def go_context(ctx, attr = None):
 
         # Action generators
         archive = toolchain.actions.archive,
-        asm = toolchain.actions.asm,
         binary = toolchain.actions.binary,
-        compile = toolchain.actions.compile,
         link = toolchain.actions.link,
-        pack = toolchain.actions.pack,
 
         # Helpers
         args = _new_args,  # deprecated
