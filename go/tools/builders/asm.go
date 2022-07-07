@@ -60,7 +60,10 @@ func asm(args []string) error {
 	}
 
 	// Build source with the assembler.
-	return asmFile(goenv, source, asmFlags, outPath)
+	// Note: As of Go 1.19, this would require a valid package path to work.
+	// But since this functionality is only used by the deprecated action API,
+	// we won't fix this.
+	return asmFile(goenv, source, "", asmFlags, outPath)
 }
 
 // buildSymabisFile generates a file from assembly files that is consumed
@@ -137,9 +140,10 @@ func buildSymabisFile(goenv *env, sFiles, hFiles []fileInfo, asmhdr string) (str
 	return symabisName, err
 }
 
-func asmFile(goenv *env, srcPath string, asmFlags []string, outPath string) error {
+func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, outPath string) error {
 	args := goenv.goTool("asm")
 	args = append(args, asmFlags...)
+	args = asmAddPackagePathArg(args, packagePath)
 	args = append(args, "-trimpath", ".")
 	args = append(args, "-o", outPath)
 	args = append(args, "--", srcPath)
