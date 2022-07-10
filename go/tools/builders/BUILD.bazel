@@ -42,7 +42,6 @@ filegroup(
     srcs = [
         "ar.go",
         "asm.go",
-        "asm_go1.go",
         "asm_go119.go",
         "builder.go",
         "cgo2.go",
